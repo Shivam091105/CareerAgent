@@ -1,0 +1,32 @@
+Career-Agent-OS/
+├── backend/                # FastAPI & LangGraph logic
+│   ├── app/
+│   │   ├── main.py         # Entry point & API routes
+│   │   ├── database.py     # MongoDB connection & Schemas
+│   │   └── dependencies.py # API Keys & Shared Utils
+│   ├── agents/             # CrewAI Squads
+│   │   ├── hunter_crew.py  # Job Scraper Logic
+│   │   └── reviewer_crew.py # Resume/Soft Skills Logic
+│   ├── graph/              # LangGraph Orchestration
+│   │   ├── state.py        # The AgentState definition
+│   │   ├── nodes.py        # Logic for each graph node
+│   │   └── workflows.py    # Connecting nodes into a Graph
+│   └── requirements.txt
+├── frontend/               # React (Vite) App
+│   ├── src/
+│   │   ├── components/     # UI Modules (Scraper, Optimizer, etc.)
+│   │   ├── hooks/          # API calling logic
+│   │   └── App.jsx
+│   └── package.json
+└── .env                    # API Keys (Tavily, Gemini, OpenAI)
+
+
+
+update :
+backend/
+└── agents/
+    ├── config/
+    │   ├── agents.yaml    # Roles, Goals, Backstories
+    │   └── tasks.yaml     # Specific task descriptions
+    ├── hunter_crew.py     # Python logic to load YAML and run Crew
+    └── ...

@@ -1,0 +1,19 @@
+# backend/agents/config/tasks.yaml
+
+job_search_task:
+  description: >
+    Search for 5-10 active job listings for {job_title}. 
+    Focus on these specific requirements: {skills}.
+    Identify the company name, location, and application link.
+  expected_output: >
+    A list of dictionaries containing 'company', 'role', 'link', and 'summary'.
+  agent: job_hunter_agent
+
+#verification_task:
+#  description: >
+#    Research the companies identified in the search task.
+#    Check for legitimacy and recent employee feedback.
+#  expected_output: >
+#    A verified list of jobs with a 'legitimacy_score' (1-10) and a
+#    'pros_cons' summary for each company.
+#  agent: company_verifier_agent

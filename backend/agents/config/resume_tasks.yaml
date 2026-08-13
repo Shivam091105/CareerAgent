@@ -1,0 +1,15 @@
+analysis_task:
+  description: >
+    1. Read the provided Resume Text.
+    2. Read the provided Job Description (JD).
+    3. Identify every hard skill and tool mentioned in the JD.
+    4. Check if those skills exist in the Resume Text.
+    5. Calculate an ATS Score (0-100) based on the percentage of matching keywords.
+    6. Rewrite 3 bullet points from the resume to naturally include the missing keywords.
+    
+    Resume Text: {resume_text}
+    Job Description: {job_description}
+  expected_output: >
+    A structured analysis containing the score, missing keywords, and rewritten bullet points.
+  agent: ats_specialist
+

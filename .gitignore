@@ -1,0 +1,22 @@
+# --- Python (Backend) ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# --- Node.js (Frontend) ---
+node_modules/
+dist/
+build/
+.npm/
+
+# --- Environment Variables (SENSITIVE) ---
+.env
+.env.local
+
+# --- OS Files ---
+.DS_Store
+Thumbs.db

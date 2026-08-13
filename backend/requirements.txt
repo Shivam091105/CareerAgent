@@ -1,0 +1,32 @@
+# Web API
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Environment variables
+python-dotenv
+
+# AI / Agents
+crewai
+langgraph
+langchain-community
+
+# LLM / Speech
+groq
+
+# Web Search
+tavily-python
+
+# PDF processing
+PyPDF2
+
+# Video processing
+moviepy
+
+# Database
+pymongo
+motor
+
+# Data validation
+pydantic
+typing-extensions
