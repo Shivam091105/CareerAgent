@@ -31,7 +31,7 @@ class JobHunterCrew:
             temperature=0
         )
 
-    def kickoff(self, inputs):
+    async def kickoff(self, inputs):
         # 2. Define Agent Manually
         hunter_agent = Agent(
             role='Senior Technical Talent Scout',
@@ -67,4 +67,4 @@ class JobHunterCrew:
             verbose=True
         )
 
-        return crew.kickoff(inputs=inputs)
+        return await crew.kickoff_async(inputs=inputs)

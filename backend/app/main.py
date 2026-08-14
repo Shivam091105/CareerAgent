@@ -2,7 +2,7 @@ import sys
 import os
 import uvicorn
 import json
-import ast  # <--- NEW: Needed to parse Python-style dicts
+import ast  # Needed to parse Python-style dicts
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -10,8 +10,10 @@ from PyPDF2 import PdfReader
 import io
 import traceback
 import shutil
-from moviepy import VideoFileClip # New Import
+from moviepy import VideoFileClip
 
+import crewai.llms.cache as crewai_cache
+crewai_cache.mark_cache_breakpoint = lambda msg: msg
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -82,7 +84,7 @@ async def trigger_job_scraper(request: ScraperRequest):
         }
 
         print(f"🚀 [JOB HUNTER] Kicking off...")
-        result = crew.kickoff(inputs=inputs)
+        result = await crew.kickoff(inputs=inputs)
 
         # --- CLEANUP STEP ---
         final_data = parse_agent_output(result)

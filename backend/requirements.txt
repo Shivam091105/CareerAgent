@@ -13,6 +13,7 @@ langchain-community
 
 # LLM / Speech
 groq
+litellm
 
 # Web Search
 tavily-python
