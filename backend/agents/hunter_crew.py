@@ -32,12 +32,27 @@ class JobHunterCrew:
         )
 
     async def kickoff(self, inputs):
+        job_title = inputs.get('job_title', '')
+        user_skills = inputs.get('skills')
+        if user_skills:
+            skills_instruction = f"the user's specific skill set: {user_skills}"
+        else:
+            skills_instruction = (
+                f"the skills and qualifications that are typically required "
+                f"for a '{job_title}' role. First think about what a "
+                f"'{job_title}' actually needs (these may be technical, "
+                f"medical, creative, managerial, etc. — do not assume a "
+                f"tech role), then use those as your search filters."
+            )
+
         # 2. Define Agent Manually
         hunter_agent = Agent(
             role='Senior Technical Talent Scout',
-            goal='Find the most relevant {job_title} roles that match the user\'s skill set: {skills}.',
+            goal=f"Find the most relevant {job_title} roles that match {skills_instruction}.",
             backstory=(
-                "You are an expert at navigating job boards. "
+                "You are an expert at navigating job boards across every industry, "
+                "not just tech. You adapt your search strategy to whatever role "
+                "you're given. "
                 "IMPORTANT: You ONLY use the tools provided to you (Web Search). "
                 "Do NOT attempt to use 'brave_search', 'google_search', or any other tool. "
                 "If you cannot find jobs, simply return an empty list."
@@ -51,8 +66,8 @@ class JobHunterCrew:
         # 3. Define Task Manually
         search_task = Task(
             description=(
-                "Search for exactly 5 active job listings for {job_title}. "
-                "Focus on these specific requirements: {skills}. "
+                f"Search for exactly 5 active job listings for '{job_title}'. "
+                f"Focus on {skills_instruction} "
                 "Identify the company name, location, and application link."
             ),
             expected_output="A list of dictionaries containing 'company', 'role', 'link', and 'summary'.",
@@ -67,4 +82,7 @@ class JobHunterCrew:
             verbose=True
         )
 
+        # job_title/skills are already baked into the prompts above via
+        # f-strings, so we no longer need CrewAI's {placeholder} substitution
+        # here — but kickoff_async still accepts inputs harmlessly.
         return await crew.kickoff_async(inputs=inputs)

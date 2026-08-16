@@ -1,15 +1,17 @@
 import sys
 import os
+import uuid
 import uvicorn
 import json
 import ast  # Needed to parse Python-style dicts
+from typing import Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from PyPDF2 import PdfReader
 import io
 import traceback
-import shutil
 from moviepy import VideoFileClip
 
 import crewai.llms.cache as crewai_cache
@@ -67,10 +69,27 @@ def parse_agent_output(output):
     return {"raw_output": content}
 
 
+def extract_text_from_pdf(content: bytes) -> str:
+    """
+    Extracts all text from a PDF's raw bytes.
+    Guards against pages that return None (e.g. scanned/image-only pages)
+    which previously crashed the app with a TypeError on string concatenation.
+    """
+    pdf_reader = PdfReader(io.BytesIO(content))
+    resume_text = ""
+    for page in pdf_reader.pages:
+        resume_text += page.extract_text() or ""
+    return resume_text
+
+
 # --- MODULE 1: Job Scraper ---
 class ScraperRequest(BaseModel):
     email: str
     query: str
+    # Optional: if the user tells us their skills, we use them to narrow the
+    # search. If they don't, the agent figures out the right skills for the
+    # role itself instead of a fixed, hardcoded list.
+    skills: Optional[str] = None
 
 
 @app.post("/api/scrape")
@@ -80,10 +99,10 @@ async def trigger_job_scraper(request: ScraperRequest):
         crew = JobHunterCrew()
         inputs = {
             'job_title': request.query,
-            'skills': 'React, Python, FastAPI, Generative AI'
+            'skills': request.skills.strip() if request.skills and request.skills.strip() else None
         }
 
-        print(f"🚀 [JOB HUNTER] Kicking off...")
+        print(f"🚀 [JOB HUNTER] Kicking off for role: {request.query}...")
         result = await crew.kickoff(inputs=inputs)
 
         # --- CLEANUP STEP ---
@@ -110,10 +129,7 @@ async def analyze_resume(
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
         content = await file.read()
-        pdf_reader = PdfReader(io.BytesIO(content))
-        resume_text = ""
-        for page in pdf_reader.pages:
-            resume_text += page.extract_text()
+        resume_text = extract_text_from_pdf(content)
 
         print(f"✅ [RESUME ANALYZER] Text Extracted: {len(resume_text)} chars")
 
@@ -124,7 +140,12 @@ async def analyze_resume(
         }
 
         print(f"🚀 [RESUME ANALYZER] Kicking off Agent...")
-        result = resume_crew.kickoff(inputs=inputs)
+        # resume_crew.kickoff() is a SYNCHRONOUS, blocking call (it waits on
+        # network calls to the LLM). Running it directly inside an `async def`
+        # route freezes the entire server for every other user until it
+        # finishes. run_in_threadpool moves it to a worker thread so other
+        # requests can still be handled concurrently.
+        result = await run_in_threadpool(resume_crew.kickoff, inputs=inputs)
 
         # Use the same cleanup helper
         return parse_agent_output(result)
@@ -149,10 +170,7 @@ async def interview_prep(
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
         content = await file.read()
-        pdf_reader = PdfReader(io.BytesIO(content))
-        resume_text = ""
-        for page in pdf_reader.pages:
-            resume_text += page.extract_text()
+        resume_text = extract_text_from_pdf(content)
 
         print(f"✅ [INTERVIEW COACH] Resume extracted. Generating questions...")
 
@@ -163,7 +181,8 @@ async def interview_prep(
             'job_description': job_description
         }
 
-        result = interview_crew.kickoff(inputs=inputs)
+        # Same fix as above: don't block the event loop with a sync call.
+        result = await run_in_threadpool(interview_crew.kickoff, inputs=inputs)
 
         # C. Return Data (using our helper)
         return parse_agent_output(result)
@@ -190,10 +209,7 @@ async def generate_email(
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
         content = await file.read()
-        pdf_reader = PdfReader(io.BytesIO(content))
-        resume_text = ""
-        for page in pdf_reader.pages:
-            resume_text += page.extract_text()
+        resume_text = extract_text_from_pdf(content)
 
         print(f"✅ [EMAIL AGENT] Resume extracted. Writing email...")
 
@@ -206,7 +222,8 @@ async def generate_email(
             'recipient_name': recipient
         }
 
-        result = email_crew.kickoff(inputs=inputs)
+        # Same fix as above: don't block the event loop with a sync call.
+        result = await run_in_threadpool(email_crew.kickoff, inputs=inputs)
 
         # C. Return Clean Data
         return parse_agent_output(result)
@@ -218,45 +235,68 @@ async def generate_email(
 
 
 # --- MODULE 5: Video Soft Skills Coach ---
+def _extract_audio_sync(temp_video: str, temp_audio: str):
+    """Blocking moviepy work, run off the event loop via run_in_threadpool."""
+    video = VideoFileClip(temp_video)
+    try:
+        video.audio.write_audiofile(temp_audio, logger=None)
+    finally:
+        # Always close, even if writing the audio track fails, otherwise the
+        # file handle stays open and os.remove() below can fail (especially
+        # on Windows) leaving orphaned temp files on disk.
+        video.close()
+
+
 @app.post("/api/analyze-video")
 async def analyze_video(file: UploadFile = File(...)):
     print(f"📥 [VIDEO COACH] Request Received. File: {file.filename}")
 
-    temp_video = f"temp_{file.filename}"
-    temp_audio = f"temp_{file.filename}.mp3"
+    # Use a random id instead of the raw filename: an uploaded filename like
+    # "../../etc/passwd.mp4" would otherwise let a request write outside the
+    # working directory (path traversal), and it also avoids collisions
+    # between two users uploading a file with the same name at once.
+    unique_id = uuid.uuid4().hex
+    ext = os.path.splitext(file.filename or "")[1] or ".mp4"
+    temp_video = f"temp_{unique_id}{ext}"
+    temp_audio = f"temp_{unique_id}.mp3"
 
     try:
-        # 1. Save Video Locally
-        with open(temp_video, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # 1. Save Video Locally.
+        # file.read() is the async-friendly way to pull the upload into
+        # memory; the actual disk write is blocking I/O so it's offloaded
+        # to a worker thread too, keeping the event loop free.
+        content = await file.read()
 
-        # 2. Extract Audio using MoviePy
+        def _save_video():
+            with open(temp_video, "wb") as buffer:
+                buffer.write(content)
+
+        await run_in_threadpool(_save_video)
+
+        # 2. Extract Audio using MoviePy (blocking CPU/IO work -> threadpool)
         print("🎬 Extracting audio...")
-        video = VideoFileClip(temp_video)
-        video.audio.write_audiofile(temp_audio, logger=None)
-        video.close()
+        await run_in_threadpool(_extract_audio_sync, temp_video, temp_audio)
 
         # 3. Run Agent
         print("🚀 [VIDEO COACH] Kicking off Agent...")
         video_crew = VideoCrew()
-        # Note: kickoff now takes the audio path, not a dict of inputs
-        result = video_crew.kickoff(audio_path=temp_audio)
-
-        # 4. Cleanup
-        if os.path.exists(temp_video): os.remove(temp_video)
-        if os.path.exists(temp_audio): os.remove(temp_audio)
+        # Note: kickoff now takes the audio path, not a dict of inputs.
+        # video_crew.kickoff() is also a blocking call (transcription + LLM),
+        # so it goes through run_in_threadpool as well.
+        result = await run_in_threadpool(video_crew.kickoff, audio_path=temp_audio)
 
         return parse_agent_output(result)
 
     except Exception as e:
         print(f"❌ [VIDEO COACH ERROR]:")
         traceback.print_exc()
-        # Cleanup on error
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        # Cleanup always runs, on both success and failure.
         if os.path.exists(temp_video): os.remove(temp_video)
         if os.path.exists(temp_audio): os.remove(temp_audio)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

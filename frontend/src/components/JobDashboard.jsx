@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 const JobDashboard = () => {
   const [email, setEmail] = useState('test@example.com');
   const [query, setQuery] = useState('');
+  const [skills, setSkills] = useState('');
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -22,7 +23,11 @@ const JobDashboard = () => {
     try {
       const response = await axios.post('http://localhost:8000/api/scrape', {
         email,
-        query
+        query,
+        // Optional — if left blank, the backend now asks the AI to figure
+        // out the right skills for whatever role was searched, instead of
+        // always filtering by a hardcoded "React, Python, FastAPI, GenAI" list.
+        skills: skills.trim() ? skills.trim() : null
       });
 
       // Handle the data regardless of if it's wrapped or a direct array
@@ -83,6 +88,19 @@ const JobDashboard = () => {
           >
             {loading ? <Loader2 className="w-6 h-6 animate-spin" /> : 'Find Jobs'}
           </button>
+        </div>
+
+        <div className="mt-4">
+          <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">
+            Your Skills (optional)
+          </label>
+          <input
+            type="text"
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl py-3 px-4 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 transition-all text-sm"
+            placeholder="e.g. Patient Care, ICU, CPR Certified — leave blank to let AI decide"
+            value={skills}
+            onChange={(e) => setSkills(e.target.value)}
+          />
         </div>
       </div>
 
@@ -152,5 +170,3 @@ const JobDashboard = () => {
 };
 
 export default JobDashboard;
-
-
