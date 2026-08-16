@@ -1,18 +1,25 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Upload, FileText, CheckCircle, AlertCircle, Award, ArrowRight, Loader2 } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertCircle, Award, ArrowRight, Loader2, CheckCircle2 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useApp, API_BASE } from '../context/AppContext';
 
 const ResumeOptimizer = () => {
+  const { profile, hasResume } = useApp();
   const [file, setFile] = useState(null);
+  const [useProfileResume, setUseProfileResume] = useState(hasResume);
   const [jd, setJd] = useState('');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  useEffect(() => {
+    setUseProfileResume(hasResume);
+  }, [hasResume]);
+
   const handleAnalyze = async () => {
-    if (!file || !jd) {
-      setError("Please upload a resume and paste a job description.");
+    if ((useProfileResume ? !hasResume : !file) || !jd) {
+      setError("Please provide a resume (profile or upload) and paste a job description.");
       return;
     }
     setLoading(true);
@@ -20,11 +27,15 @@ const ResumeOptimizer = () => {
     setResult(null);
 
     const formData = new FormData();
-    formData.append('file', file);
+    if (useProfileResume) {
+      formData.append('resume_text', profile.resume_text);
+    } else {
+      formData.append('file', file);
+    }
     formData.append('job_description', jd);
 
     try {
-      const response = await axios.post('http://localhost:8000/api/analyze-resume', formData);
+      const response = await axios.post(`${API_BASE}/api/analyze-resume`, formData);
       setResult(response.data);
     } catch (err) {
       console.error(err);
@@ -52,30 +63,57 @@ const ResumeOptimizer = () => {
         >
           {/* File Upload */}
           <div className="bg-slate-800/50 p-8 rounded-2xl border border-slate-700/50 hover:border-emerald-500/30 transition-all shadow-lg backdrop-blur-sm">
-            <label className="block text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wider">1. Upload Resume (PDF)</label>
-            <div className="flex items-center justify-center w-full">
-              <label className={`flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${file ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-slate-600 bg-slate-800 hover:bg-slate-750'}`}>
-                <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                  {file ? (
-                    <>
-                      <FileText className="w-10 h-10 mb-3 text-emerald-400" />
-                      <p className="text-sm text-emerald-300 font-medium">{file.name}</p>
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="w-10 h-10 mb-3 text-slate-400" />
-                      <p className="text-sm text-slate-400">Click to upload or drag & drop</p>
-                    </>
-                  )}
+            <label className="block text-sm font-semibold text-slate-300 mb-4 uppercase tracking-wider">1. Resume</label>
+
+            {hasResume && useProfileResume ? (
+              <div className="mb-2 p-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm text-emerald-300 font-medium">Using your saved profile resume</p>
+                    <p className="text-xs text-slate-500 mt-1">{profile?.filename || 'Edited profile text'}</p>
+                  </div>
                 </div>
-                <input
-                  type="file"
-                  className="hidden"
-                  accept=".pdf"
-                  onChange={(e) => setFile(e.target.files[0])}
-                />
-              </label>
-            </div>
+                <button
+                  onClick={() => setUseProfileResume(false)}
+                  className="text-xs text-slate-400 hover:text-white underline whitespace-nowrap"
+                >
+                  Upload different
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center w-full">
+                <label className={`flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${file ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-slate-600 bg-slate-800 hover:bg-slate-750'}`}>
+                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                    {file ? (
+                      <>
+                        <FileText className="w-10 h-10 mb-3 text-emerald-400" />
+                        <p className="text-sm text-emerald-300 font-medium">{file.name}</p>
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-10 h-10 mb-3 text-slate-400" />
+                        <p className="text-sm text-slate-400">Click to upload or drag & drop</p>
+                      </>
+                    )}
+                  </div>
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".pdf"
+                    onChange={(e) => setFile(e.target.files[0])}
+                  />
+                </label>
+              </div>
+            )}
+            {hasResume && !useProfileResume && (
+              <button
+                onClick={() => { setUseProfileResume(true); setFile(null); }}
+                className="mt-3 text-xs text-emerald-400 hover:text-emerald-300 underline"
+              >
+                Use saved profile resume instead
+              </button>
+            )}
           </div>
 
           {/* JD Input */}
