@@ -26,6 +26,7 @@ from agents.resume_crew import ResumeCrew
 from agents.interview_crew import InterviewCrew
 from agents.email_crew import EmailCrew
 from agents.video_crew import VideoCrew
+from app import profile_store
 
 
 app = FastAPI(title="Career-Agent.OS API")
@@ -37,6 +38,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Task 1: profile store — make sure the `profiles` table exists before any
+# request tries to read/write it.
+profile_store.init_db()
 
 
 # --- HELPER: Clean Agent Output ---
@@ -82,6 +87,67 @@ def extract_text_from_pdf(content: bytes) -> str:
     return resume_text
 
 
+def resolve_resume_text(file: Optional[UploadFile], content: Optional[bytes], resume_text: Optional[str]) -> str:
+    """
+    Shared by every route that needs resume text (resume analyzer, interview
+    prep, cold email). A module can get the text one of two ways now:
+      1. A freshly uploaded PDF (old behaviour, still supported).
+      2. Text already saved to the user's profile (Task 1) — sent as a plain
+         form field, so the frontend doesn't need to fake a PDF upload just
+         to reuse text it already has.
+    Whichever is present wins; if neither is present, that's a user error.
+    """
+    if file is not None and content:
+        return extract_text_from_pdf(content)
+    if resume_text and resume_text.strip():
+        return resume_text
+    raise HTTPException(
+        status_code=400,
+        detail="No resume provided. Upload a PDF or save a resume to your profile first."
+    )
+
+
+# --- Profile Store (Task 1) ---
+class ProfileTextUpdate(BaseModel):
+    email: str
+    resume_text: str
+
+
+@app.get("/api/profile/{email}")
+async def get_profile(email: str):
+    profile = await run_in_threadpool(profile_store.get_profile, email)
+    if not profile:
+        raise HTTPException(status_code=404, detail="No profile found for this email yet.")
+    return profile
+
+
+@app.post("/api/profile/upload")
+async def upload_profile_resume(
+        email: str = Form(...),
+        file: UploadFile = File(...)
+):
+    """Upload (or replace) the PDF resume attached to a profile."""
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    content = await file.read()
+    resume_text = extract_text_from_pdf(content)
+
+    profile = await run_in_threadpool(
+        profile_store.upsert_profile, email, resume_text, file.filename
+    )
+    return profile
+
+
+@app.put("/api/profile")
+async def update_profile_text(payload: ProfileTextUpdate):
+    """Save hand-edited resume text without re-uploading a PDF."""
+    profile = await run_in_threadpool(
+        profile_store.upsert_profile, payload.email, payload.resume_text, None
+    )
+    return profile
+
+
 # --- MODULE 1: Job Scraper ---
 class ScraperRequest(BaseModel):
     email: str
@@ -119,23 +185,26 @@ async def trigger_job_scraper(request: ScraperRequest):
 # --- MODULE 2: Resume Analyzer ---
 @app.post("/api/analyze-resume")
 async def analyze_resume(
-        file: UploadFile = File(...),
-        job_description: str = Form(...)
+        file: UploadFile = File(None),
+        job_description: str = Form(...),
+        resume_text: str = Form(None)
 ):
-    print(f"📥 [RESUME ANALYZER] Request Received. File: {file.filename}")
+    print(f"📥 [RESUME ANALYZER] Request Received. File: {file.filename if file else 'none (using profile text)'}")
 
     try:
-        if file.content_type != "application/pdf":
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+        content = None
+        if file is not None:
+            if file.content_type != "application/pdf":
+                raise HTTPException(status_code=400, detail="Only PDF files are supported")
+            content = await file.read()
 
-        content = await file.read()
-        resume_text = extract_text_from_pdf(content)
+        resolved_text = resolve_resume_text(file, content, resume_text)
 
-        print(f"✅ [RESUME ANALYZER] Text Extracted: {len(resume_text)} chars")
+        print(f"✅ [RESUME ANALYZER] Text ready: {len(resolved_text)} chars")
 
         resume_crew = ResumeCrew()
         inputs = {
-            'resume_text': resume_text,
+            'resume_text': resolved_text,
             'job_description': job_description
         }
 
@@ -159,25 +228,27 @@ async def analyze_resume(
 # --- MODULE 3: Interview Prep ---
 @app.post("/api/interview-prep")
 async def interview_prep(
-        file: UploadFile = File(...),
-        job_description: str = Form(...)
+        file: UploadFile = File(None),
+        job_description: str = Form(...),
+        resume_text: str = Form(None)
 ):
-    print(f"📥 [INTERVIEW COACH] Request Received. File: {file.filename}")
+    print(f"📥 [INTERVIEW COACH] Request Received. File: {file.filename if file else 'none (using profile text)'}")
 
     try:
-        # A. Extract Text from PDF (Reuse logic)
-        if file.content_type != "application/pdf":
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+        content = None
+        if file is not None:
+            if file.content_type != "application/pdf":
+                raise HTTPException(status_code=400, detail="Only PDF files are supported")
+            content = await file.read()
 
-        content = await file.read()
-        resume_text = extract_text_from_pdf(content)
+        resolved_text = resolve_resume_text(file, content, resume_text)
 
-        print(f"✅ [INTERVIEW COACH] Resume extracted. Generating questions...")
+        print(f"✅ [INTERVIEW COACH] Text ready. Generating questions...")
 
         # B. Run Agent
         interview_crew = InterviewCrew()
         inputs = {
-            'resume_text': resume_text,
+            'resume_text': resolved_text,
             'job_description': job_description
         }
 
@@ -196,27 +267,29 @@ async def interview_prep(
 # --- MODULE 4: Cold Email Generator ---
 @app.post("/api/generate-email")
 async def generate_email(
-        file: UploadFile = File(...),
+        file: UploadFile = File(None),
         job_description: str = Form(...),
         company: str = Form(...),
-        recipient: str = Form(...)
+        recipient: str = Form(...),
+        resume_text: str = Form(None)
 ):
     print(f"📥 [EMAIL AGENT] Request Received for company: {company}")
 
     try:
-        # A. Extract Text from PDF (Standard Logic)
-        if file.content_type != "application/pdf":
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+        content = None
+        if file is not None:
+            if file.content_type != "application/pdf":
+                raise HTTPException(status_code=400, detail="Only PDF files are supported")
+            content = await file.read()
 
-        content = await file.read()
-        resume_text = extract_text_from_pdf(content)
+        resolved_text = resolve_resume_text(file, content, resume_text)
 
-        print(f"✅ [EMAIL AGENT] Resume extracted. Writing email...")
+        print(f"✅ [EMAIL AGENT] Text ready. Writing email...")
 
         # B. Run Agent
         email_crew = EmailCrew()
         inputs = {
-            'resume_text': resume_text,
+            'resume_text': resolved_text,
             'job_description': job_description,
             'company_name': company,
             'recipient_name': recipient

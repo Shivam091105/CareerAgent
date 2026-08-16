@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import { Search, Briefcase, ExternalLink, Loader2, Building, Globe } from 'lucide-react';
+import { Search, Briefcase, ExternalLink, Loader2, Building, Globe, ArrowRightCircle, CheckCircle2 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useApp } from '../context/AppContext';
+import { useNavigate } from 'react-router-dom';
 
 const JobDashboard = () => {
-  const [email, setEmail] = useState('test@example.com');
+  const { email, selectedJob, setSelectedJob } = useApp();
+  const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [skills, setSkills] = useState('');
   const [jobs, setJobs] = useState([]);
@@ -22,7 +25,7 @@ const JobDashboard = () => {
 
     try {
       const response = await axios.post('http://localhost:8000/api/scrape', {
-        email,
+        email: email || 'test@example.com',
         query,
         // Optional — if left blank, the backend now asks the AI to figure
         // out the right skills for whatever role was searched, instead of
@@ -141,7 +144,7 @@ const JobDashboard = () => {
                     </p>
                   </div>
 
-                  <div className="flex flex-col justify-between shrink-0 gap-4">
+                  <div className="flex flex-col justify-between shrink-0 gap-2">
                     <a
                       href={job.link}
                       target="_blank"
@@ -150,6 +153,27 @@ const JobDashboard = () => {
                     >
                       Apply Now <ExternalLink className="w-4 h-4" />
                     </a>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { setSelectedJob(job); navigate('/interview'); }}
+                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-violet-500/10 text-violet-400 hover:bg-violet-500/20 border border-violet-500/20 transition-all whitespace-nowrap"
+                        title="Send this job into Interview Coach"
+                      >
+                        <ArrowRightCircle className="w-3.5 h-3.5" /> Prep interview
+                      </button>
+                      <button
+                        onClick={() => { setSelectedJob(job); navigate('/email'); }}
+                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 border border-orange-500/20 transition-all whitespace-nowrap"
+                        title="Send this job into Cold Emailer"
+                      >
+                        <ArrowRightCircle className="w-3.5 h-3.5" /> Draft email
+                      </button>
+                    </div>
+                    {selectedJob && selectedJob.link === job.link && (
+                      <p className="flex items-center gap-1 text-[11px] text-emerald-400 justify-center">
+                        <CheckCircle2 className="w-3 h-3" /> Selected
+                      </p>
+                    )}
                   </div>
                 </div>
               </motion.div>
