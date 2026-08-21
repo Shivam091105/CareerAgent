@@ -2,7 +2,7 @@
 
 An AI-powered career intelligence platform that helps job seekers streamline the job search and interview process through specialized AI agents.
 
-The platform combines **job discovery, resume analysis, interview preparation, recruiter outreach, and interview communication analysis** into a single web application powered by **CrewAI, Groq LLMs, FastAPI, and React**.
+The platform combines **job discovery, resume analysis, interview preparation, recruiter outreach, interview communication analysis, and full-pipeline autopilot orchestration** into a single web application powered by **CrewAI, LangGraph, Groq LLMs, FastAPI, and React**.
 
 ---
 
@@ -12,17 +12,25 @@ The **AI-Powered Career Intelligence Platform** uses specialized AI agents to au
 
 Instead of relying on a single general-purpose chatbot, the system separates responsibilities across task-specific agents:
 
-* **Job Hunter Agent** - discovers relevant job opportunities using web search.
+* **Job Hunter Agent** - discovers relevant job opportunities using web search, adapting its search strategy (and required skills) to whatever role is searched, not just tech roles.
 * **Resume Optimization Agent** - evaluates a resume against a job description and identifies ATS gaps.
 * **Interview Preparation Agent** - generates role-specific technical and behavioral interview questions.
 * **Cold Email Agent** - generates personalized recruiter outreach emails.
 * **Video Coach Agent** - transcribes mock interview recordings and evaluates communication skills.
+* **Profile Store** - saves a candidate's resume once (keyed by email) so every other module can reuse it instead of re-uploading a PDF each time.
+* **Autopilot Orchestrator (LangGraph)** - chains the job hunter, resume, interview, and email agents into a single automated pipeline, with a real branch: skip straight to matching if a job was already picked in the UI, otherwise search fresh first.
 
 The backend exposes these capabilities through REST APIs, while the React frontend provides an interactive interface for each workflow.
 
 ---
 
 ## Key Features
+
+### 0. Candidate Profile (Save Once, Reuse Everywhere)
+
+Set an email as your profile ID, upload a PDF resume once (or paste/edit the text directly), and every other module — Resume Optimizer, Interview Coach, Cold Emailer, Autopilot — reuses it by default. A one-click "Upload different" option is still available for a one-off run without touching the saved profile.
+
+Stored in a lightweight SQLite database (`backend/app/career_agent.db`), keyed by email. No login system yet — this is a plain identifier, not authentication.
 
 ### 1. AI Job Discovery
 
@@ -33,7 +41,7 @@ The Job Hunter agent:
 * Searches the web using Tavily.
 * Identifies relevant job listings.
 * Extracts company, role, location, application link, and summary.
-* Uses the candidate's skills to improve relevance.
+* Uses the candidate's skills to improve relevance — if no skills are given, the agent infers what's actually relevant to the searched role itself (technical, medical, creative, managerial, etc.) instead of defaulting to a fixed tech skill list.
 
 ### 2. Resume Optimization
 
@@ -103,50 +111,67 @@ The system evaluates:
 * Delivery.
 * Areas for improvement.
 
+### 6. Autopilot (LangGraph Orchestration)
+
+Run the entire pipeline — job match, resume analysis, interview prep, and cold email draft — in a single request instead of clicking through five separate modules.
+
+```text
+                         load_profile
+                              │
+              ┌───────────────┴───────────────┐
+      job already picked?              no job picked yet
+              │                                │
+              ▼                                ▼
+       analyze_resume  ◄──── pick_job ◄──── hunt_jobs
+              │
+              ▼
+        prep_interview
+              │
+              ▼
+         draft_email
+```
+
+If a job was already selected via the Job Hunter's "Prep interview" / "Draft email" buttons, the graph skips straight to `analyze_resume`. Otherwise it searches fresh via `hunt_jobs` → `pick_job` first. Both paths converge on the same downstream stages.
+
+If any stage fails (e.g. a rate limit), that stage records the error and the graph routes straight to an early end instead of continuing — so a failed interview-prep call doesn't immediately fire another LLM call for the email draft into the same rate limit. The response always includes whatever *did* complete, plus a plain-English reason for whatever didn't.
+
 ---
 
 ## System Architecture
 
 ```text
                          ┌─────────────────────────┐
-                         │      React Frontend     │
-                         │   Vite + Tailwind CSS   │
+                         │      React Frontend      │
+                         │  Vite + Tailwind + Context│
                          └────────────┬────────────┘
-                                      │
                                       │ REST API
                                       ▼
                          ┌─────────────────────────┐
-                         │      FastAPI Backend    │
-                         │                         │
-                         │   API /api/... routes   │
-                         └────────────┬────────────┘
-                                      │
-              ┌───────────────────────┼───────────────────────┐
-              │                       │                       │
-              ▼                       ▼                       ▼
-      ┌───────────────┐       ┌───────────────┐       ┌───────────────┐
-      │  Job Hunter   │       │ Resume Agent  │       │ Interview     │
-      │    Agent      │       │               │       │ Coach Agent   │
-      └───────┬───────┘       └───────────────┘       └───────────────┘
-              │
-              ▼
-         Tavily Search
-
-              ┌───────────────────────┬───────────────────────┐
-              │                       │                       │
-              ▼                       ▼                       ▼
-      ┌───────────────┐       ┌───────────────┐       ┌───────────────┐
-      │ Cold Email    │       │ Video Coach   │       │ PDF Processing │
-      │ Agent         │       │ Agent         │       │   / MongoDB    │
-      └───────┬───────┘       └───────┬───────┘       └───────────────┘
-              │                       │
-              │                       ▼
-              │                Groq Whisper
-              │
-              └───────────────┬────────────────
-                              ▼
-                       Groq Llama 3.3
+                         │      FastAPI Backend     │
+                         │  /api/... routes, 429s   │
+                         └──────┬────────────┬──────┘
+                                │            │
+                                ▼            ▼
+                  ┌──────────────────┐  ┌──────────────────────┐
+                  │  Profile Store    │  │ LangGraph Orchestrator│
+                  │  SQLite, by email │  │ /api/orchestrate/run │
+                  └──────────────────┘  └──────────┬────────────┘
+                                                    │
+                                                    ▼
+                                       ┌─────────────────────────┐
+                                       │      5 Crew Modules      │
+                                       │  hunter · resume · int-  │
+                                       │  erview · email · video  │
+                                       └──────────┬──────┬───────┘
+                                                  │      │
+                                                  ▼      ▼
+                                      ┌────────────────┐ ┌──────────────┐
+                                      │ Groq LLM+Whisper│ │ Tavily Search│
+                                      │ retry + backoff │ │ (job hunter) │
+                                      └────────────────┘ └──────────────┘
 ```
+
+The FastAPI backend exposes both the direct, standalone `/api/...` routes (used by the individual frontend pages) *and* the LangGraph orchestrator, which internally calls the same 5 crew modules in sequence rather than duplicating any agent logic. Every crew's `LLM(...)` instance is configured with a timeout and automatic retry/backoff, so a transient Groq rate limit is absorbed silently where possible; anything that still fails comes back as a proper `429` instead of a raw stack trace.
 
 ---
 
@@ -174,21 +199,21 @@ The system evaluates:
 ### AI / Agent Framework
 
 * **CrewAI**
+* **LangGraph** — orchestrates the Autopilot pipeline (`backend/graph/`)
 * **Groq**
-* **Llama 3.3 70B**
+* **Llama 3.3 70B** (or your account's current available Groq model — see Troubleshooting)
 * **Whisper Large V3**
+* **litellm** — auto-retry/backoff on rate limits, used underneath CrewAI's `LLM(...)`
 
 ### External Services
 
 * **Tavily** — web search and job discovery
 * **Groq API** — LLM inference and speech transcription
 
-### Database
+### Data Storage
 
-* **MongoDB**
-* **Motor**
-
-> MongoDB integration is included in the backend for user profiles and history, but the current API workflows primarily operate directly on request data.
+* **SQLite** — the profile store (`backend/app/career_agent.db`), created automatically on first run. Not committed to git.
+* **MongoDB / Motor** — present in the backend's dependencies for future use, but not currently wired into any route (see `app/database.py`, `app/dependencies.py`).
 
 ---
 
@@ -211,17 +236,20 @@ Career-Agent-OS/
 │   │   ├── interview_crew.py
 │   │   ├── email_crew.py
 │   │   ├── video_crew.py
-│   │   └── reviewer_crew.py
+│   │   └── reviewer_crew.py        # scaffold, not currently wired up
 │   │
 │   ├── app/
-│   │   ├── main.py
-│   │   ├── database.py
-│   │   └── dependencies.py
+│   │   ├── main.py                 # all FastAPI routes
+│   │   ├── utils.py                # parse_agent_output, PDF extraction, rate-limit detection
+│   │   ├── profile_store.py        # SQLite-backed profile CRUD
+│   │   ├── database.py             # MongoDB scaffold, not currently wired up
+│   │   ├── dependencies.py         # scaffold, not currently wired up
+│   │   └── career_agent.db         # auto-created SQLite file (gitignored)
 │   │
 │   ├── graph/
-│   │   ├── nodes.py
-│   │   ├── state.py
-│   │   └── workflows.py
+│   │   ├── state.py                # PipelineState — shared state shape
+│   │   ├── nodes.py                # one node per pipeline stage
+│   │   └── workflows.py            # builds + compiles the StateGraph
 │   │
 │   ├── tools/
 │   │   └── tavily_search.py
@@ -238,7 +266,12 @@ Career-Agent-OS/
 │   │   │   ├── InterviewPrep.jsx
 │   │   │   ├── ColdEmail.jsx
 │   │   │   ├── VideoCoach.jsx
+│   │   │   ├── Profile.jsx         # upload/edit the saved resume
+│   │   │   ├── AutoPilot.jsx       # triggers /api/orchestrate/run
 │   │   │   └── Sidebar.jsx
+│   │   │
+│   │   ├── context/
+│   │   │   └── AppContext.jsx      # shared email/profile/selectedJob state
 │   │   │
 │   │   ├── App.jsx
 │   │   ├── App.css
@@ -383,21 +416,62 @@ The frontend will normally be available at:
 http://localhost:5173
 ```
 
+Before using **Resume Optimizer**, **Interview Coach**, **Cold Emailer**, or **Autopilot** without re-uploading a PDF each time, visit `/profile` first, set an email, and upload/save a resume.
+
 ---
 
 # API Endpoints
 
-| Endpoint              | Method | Purpose                              |
-| --------------------- | ------ | ------------------------------------ |
-| `/api/scrape`         | POST   | Search for relevant jobs             |
-| `/api/analyze-resume` | POST   | Analyze resume against a JD          |
-| `/api/interview-prep` | POST   | Generate interview preparation       |
-| `/api/generate-email` | POST   | Generate recruiter outreach email    |
-| `/api/analyze-video`  | POST   | Analyze mock interview communication |
+| Endpoint                | Method | Purpose                                          |
+| ------------------------ | ------ | ------------------------------------------------- |
+| `/api/profile/{email}`   | GET    | Fetch a saved profile                            |
+| `/api/profile/upload`    | POST   | Upload/replace a resume PDF, parsed and saved    |
+| `/api/profile`           | PUT    | Save hand-edited resume text                     |
+| `/api/orchestrate/run`   | POST   | Run the full Autopilot pipeline (LangGraph)      |
+| `/api/scrape`            | POST   | Search for relevant jobs                          |
+| `/api/analyze-resume`    | POST   | Analyze resume against a JD                       |
+| `/api/interview-prep`    | POST   | Generate interview preparation                    |
+| `/api/generate-email`    | POST   | Generate recruiter outreach email                 |
+| `/api/analyze-video`     | POST   | Analyze mock interview communication              |
+
+`analyze-resume`, `interview-prep`, and `generate-email` each accept **either** a fresh PDF upload (`file`) **or** a `resume_text` form field pulled from the saved profile — whichever is present is used.
 
 ---
 
 ## API Workflow
+
+### Candidate Profile
+
+```text
+GET  /api/profile/{email}
+POST /api/profile/upload   (multipart: email, file)
+PUT  /api/profile          (json: email, resume_text)
+```
+
+Every other module that needs a resume can send `resume_text` instead of re-uploading a file, by pulling it from `GET /api/profile/{email}` first.
+
+---
+
+### Autopilot (Full Pipeline)
+
+```text
+POST /api/orchestrate/run
+```
+
+Request:
+
+```json
+{
+  "email": "candidate@example.com",
+  "job_title": "Backend Engineer",
+  "skills": null,
+  "selected_job": null
+}
+```
+
+Provide either `job_title` (search fresh) or `selected_job` (skip straight to matching, e.g. a job picked in Job Hunter). Returns the matched job, resume analysis, interview prep, cold email draft, and a list of any per-stage errors.
+
+---
 
 ### Job Discovery
 
@@ -410,11 +484,12 @@ Request:
 ```json
 {
   "email": "candidate@example.com",
-  "query": "Java Backend Developer"
+  "query": "Java Backend Developer",
+  "skills": null
 }
 ```
 
-The request is processed by the Job Hunter agent and Tavily web search.
+`skills` is optional. If omitted, the Job Hunter agent infers what's relevant to the searched role itself instead of using a fixed list. The request is processed by the Job Hunter agent and Tavily web search.
 
 ---
 
@@ -583,6 +658,40 @@ Structured Feedback
 
 ---
 
+# Autopilot Pipeline (LangGraph)
+
+```text
+                          load_profile
+                               │
+               ┌───────────────┴───────────────┐
+        job already picked?              no job picked yet
+               │                                │
+               ▼                                ▼
+        analyze_resume ◄──── pick_job ◄──── hunt_jobs
+               │
+               ▼
+         prep_interview
+               │
+               ▼
+          draft_email
+```
+
+Built and compiled in `backend/graph/workflows.py`. Every node in `backend/graph/nodes.py` wraps an existing crew — no new AI behavior, just chaining the existing steps. If any stage fails, it's recorded in the response's `errors` list and the graph stops there rather than continuing into a stage that would likely fail too (e.g. hitting the same rate limit twice in a row).
+
+---
+
+# Reliability & Rate Limits
+
+Groq occasionally rate-limits requests, and the model available to a given API key can change over time. The project handles this in a few places:
+
+* **Retry with backoff** — every crew's `LLM(...)` is configured with `additional_params={"num_retries": 3}` and a `timeout`, forwarded straight to `litellm`, which auto-retries on 429s before giving up.
+* **A fixed graph edge** — `prep_interview → draft_email` used to be unconditional, so a rate limit on interview prep didn't stop the email draft from immediately hitting the same limit. It's now a conditional edge like every other stage.
+* **Proper HTTP status codes** — `app/utils.py`'s `is_rate_limit_error()` detects rate-limit errors by message content (since Groq/litellm/instructor wrap them in different exception classes) and every route returns `429` with a clear message instead of a raw `500` stack trace.
+* **Spaced-out Autopilot calls** — Autopilot fires up to 4 LLM calls in one request, which alone can trip a per-minute limit. A short delay between stages spreads the calls out.
+* **Model not found ≠ rate limit** — if you see `model_not_found` rather than a rate-limit error, that's a different issue: Groq has deprecated the hardcoded model string. Check `console.groq.com/docs/models` (or list models via the Groq client) for what's currently available on your account, and update the `model="groq/..."` string in the 5 files under `backend/agents/`.
+
+---
+
 # Security & Configuration
 
 API keys should **never be committed to Git**.
@@ -595,6 +704,12 @@ Example:
 GROQ_API_KEY=...
 TAVILY_API_KEY=...
 MONGO_URL=...
+```
+
+Also gitignore the auto-created SQLite profile database:
+
+```gitignore
+backend/app/career_agent.db
 ```
 
 For deployment, configure these values using the hosting platform's environment-variable system rather than committing credentials to the repository.
@@ -640,17 +755,19 @@ npm run lint
 
 # Future Improvements
 
-Potential extensions include:
+Done since this section was first written: candidate profiles (SQLite-backed, reused across modules), LangGraph orchestration for the full pipeline, and rate-limit-aware retries/error handling.
 
-* Persistent user authentication and profiles.
+Potential extensions still open:
+
+* Persistent user authentication (the current profile is keyed by a plain email string, not a login).
 * Job recommendation ranking based on candidate profiles.
-* Automated job tracking and application history.
+* Automated job tracking and application history (a run-history log tied to each profile).
 * Resume version management for multiple job roles.
 * LinkedIn/GitHub profile analysis.
 * Interview session history and performance tracking.
-* Retrieval-Augmented Generation for personalized career recommendations.
-* Agent orchestration using LangGraph for multi-step workflows.
-* Background job processing for long-running AI tasks.
+* Retrieval-Augmented Generation — worth adding once a profile holds multiple resumes/cover letters/saved jobs; a single resume already fits in one prompt, so RAG isn't needed yet.
+* Background job processing for long-running AI tasks (Autopilot currently runs synchronously within the request).
+* Automated test coverage (currently none).
 * Containerized deployment using Docker.
 * Production deployment with authentication, rate limiting, and observability.
 
@@ -659,4 +776,3 @@ Potential extensions include:
 # Disclaimer
 
 AI-generated job recommendations, resume feedback, interview questions, and communication analysis should be treated as assistance rather than authoritative career advice. Job listings and external links may change or become unavailable.
-
