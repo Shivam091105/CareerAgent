@@ -26,14 +26,18 @@ class JobHunterCrew:
             raise ValueError("GROQ_API_KEY is missing in .env file")
 
         self.llm = LLM(
-            model="groq/llama-3.3-70b-versatile",
+            model="groq/openai/gpt-oss-120b",
             api_key=api_key,
-            temperature=0
+            temperature=0,
+            timeout=60,
+            max_completion_tokens=900,
+            additional_params={"num_retries": 3}
         )
 
     async def kickoff(self, inputs):
         job_title = inputs.get('job_title', '')
         user_skills = inputs.get('skills')
+
         if user_skills:
             skills_instruction = f"the user's specific skill set: {user_skills}"
         else:
@@ -66,7 +70,7 @@ class JobHunterCrew:
         # 3. Define Task Manually
         search_task = Task(
             description=(
-                f"Search for exactly 5 active job listings for '{job_title}'. "
+                f"Search for exactly 3 active job listings for '{job_title}'. "
                 f"Focus on {skills_instruction} "
                 "Identify the company name, location, and application link."
             ),

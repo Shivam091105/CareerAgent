@@ -1,12 +1,13 @@
 import React from 'react';
 // ✅ FIXED: Single import line with all icons (Briefcase, FileText, User, Settings, MessageSquare, Mail, Video)
-import { Briefcase, FileText, User, Settings, MessageSquare, Mail, Video } from 'lucide-react';
+import { Briefcase, FileText, User, Settings, MessageSquare, Mail, Video, Rocket } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 
 const Sidebar = () => {
   const location = useLocation();
 
   const menuItems = [
+    { icon: Rocket, label: 'Autopilot', path: '/autopilot' },
     { icon: Briefcase, label: 'Job Hunter', path: '/' },
     { icon: FileText, label: 'Resume Architect', path: '/resume' },
     { icon: MessageSquare, label: 'Interview Coach', path: '/interview' },

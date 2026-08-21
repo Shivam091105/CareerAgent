@@ -60,7 +60,7 @@ const JobDashboard = () => {
           <Briefcase className="w-8 h-8 text-cyan-400" />
         </div>
         <h1 className="text-5xl font-extrabold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
-          Career-Agent.OS
+          Career-Agent
         </h1>
         <p className="text-slate-400 text-lg">Module 1: Autonomous Job Hunter</p>
       </div>

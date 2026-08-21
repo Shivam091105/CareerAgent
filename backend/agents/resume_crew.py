@@ -19,9 +19,11 @@ class ResumeCrew:
     def __init__(self):
         # 1. Setup LLM
         self.llm = LLM(
-            model="groq/llama-3.3-70b-versatile",
+            model="groq/openai/gpt-oss-120b",
             api_key=os.getenv("GROQ_API_KEY"),
-            temperature=0
+            temperature=0,
+            timeout=60,
+            additional_params={"num_retries": 3}
         )
 
     def kickoff(self, inputs):

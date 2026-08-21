@@ -18,9 +18,11 @@ class EmailCrew:
     def __init__(self):
         # Using Groq for speed and persuasive writing capabilities
         self.llm = LLM(
-            model="groq/llama-3.3-70b-versatile",
+            model="groq/openai/gpt-oss-120b",
             api_key=os.getenv("GROQ_API_KEY"),
-            temperature=0.7 # Higher temp for creativity
+            temperature=0.7, # Higher temp for creativity
+            timeout=60,
+            additional_params={"num_retries": 3}
         )
 
     def kickoff(self, inputs):
@@ -64,4 +66,3 @@ class EmailCrew:
         )
 
         return crew.kickoff(inputs=inputs)
-

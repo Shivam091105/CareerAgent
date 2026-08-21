@@ -23,9 +23,11 @@ class InterviewCrew:
     def __init__(self):
         # Using Groq for speed
         self.llm = LLM(
-            model="groq/llama-3.3-70b-versatile",
+            model="groq/openai/gpt-oss-120b",
             api_key=os.getenv("GROQ_API_KEY"),
-            temperature=0.2
+            temperature=0.2,
+            timeout=60,
+            additional_params={"num_retries": 3}
         )
 
     def kickoff(self, inputs):
@@ -69,4 +71,3 @@ class InterviewCrew:
         )
 
         return crew.kickoff(inputs=inputs)
-

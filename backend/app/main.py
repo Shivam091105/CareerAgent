@@ -2,15 +2,11 @@ import sys
 import os
 import uuid
 import uvicorn
-import json
-import ast  # Needed to parse Python-style dicts
 from typing import Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from PyPDF2 import PdfReader
-import io
 import traceback
 from moviepy import VideoFileClip
 
@@ -27,6 +23,8 @@ from agents.interview_crew import InterviewCrew
 from agents.email_crew import EmailCrew
 from agents.video_crew import VideoCrew
 from app import profile_store
+from app.utils import parse_agent_output, extract_text_from_pdf, is_rate_limit_error
+from graph.workflows import run_pipeline
 
 
 app = FastAPI(title="Career-Agent.OS API")
@@ -44,49 +42,25 @@ app.add_middleware(
 profile_store.init_db()
 
 
-# --- HELPER: Clean Agent Output ---
-def parse_agent_output(output):
+# --- HELPER: turn a caught LLM-call exception into the right HTTP error ---
+def raise_for_llm_error(e: Exception):
     """
-    Converts the Agent's output (which might be a string with single quotes)
-    into a proper Python List/Dictionary for JSON response.
+    Every route that calls a crew catches exceptions the same way: log it,
+    then decide whether it was a rate limit (so the user should just wait
+    and retry) or something else (a real 500). Centralized here so all six
+    routes give the same, correct response instead of dumping a raw
+    stack-trace string at the user either way.
     """
-    # 1. If it's already a Pydantic object, dump it
-    if hasattr(output, 'pydantic') and output.pydantic:
-        return output.pydantic.model_dump()
-
-    # 2. Get the raw string content
-    # CrewAI output might be an object, so we get .raw or str()
-    content = output.raw if hasattr(output, 'raw') else str(output)
-
-    # 3. Try parsing as Standard JSON
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        pass  # Not standard JSON, keep trying
-
-    # 4. Try parsing as Python Literal (handles single quotes 'key': 'value')
-    try:
-        return ast.literal_eval(content)
-    except (ValueError, SyntaxError):
-        pass  # Failed to parse structure
-
-    # 5. Fallback: Return raw string wrapped in a dict
-    return {"raw_output": content}
+    traceback.print_exc()
+    if is_rate_limit_error(e):
+        raise HTTPException(
+            status_code=429,
+            detail="Groq's rate limit was hit. Please wait a moment and try again."
+        )
+    raise HTTPException(status_code=500, detail=str(e))
 
 
-def extract_text_from_pdf(content: bytes) -> str:
-    """
-    Extracts all text from a PDF's raw bytes.
-    Guards against pages that return None (e.g. scanned/image-only pages)
-    which previously crashed the app with a TypeError on string concatenation.
-    """
-    pdf_reader = PdfReader(io.BytesIO(content))
-    resume_text = ""
-    for page in pdf_reader.pages:
-        resume_text += page.extract_text() or ""
-    return resume_text
-
-
+# --- HELPER: resolve resume text from either an upload or the saved profile ---
 def resolve_resume_text(file: Optional[UploadFile], content: Optional[bytes], resume_text: Optional[str]) -> str:
     """
     Shared by every route that needs resume text (resume analyzer, interview
@@ -148,6 +122,47 @@ async def update_profile_text(payload: ProfileTextUpdate):
     return profile
 
 
+# --- MODULE 0: Autopilot Pipeline (LangGraph) ---
+class PipelineRequest(BaseModel):
+    email: str
+    # Provide job_title for a fresh search, OR selected_job to skip
+    # straight to matching against a job already picked in Job Hunter
+    # (Task 2's job context bridge).
+    job_title: Optional[str] = None
+    skills: Optional[str] = None
+    selected_job: Optional[dict] = None
+
+
+@app.post("/api/orchestrate/run")
+async def run_orchestration(request: PipelineRequest):
+    """
+    Runs the full autopilot pipeline: profile -> job search/match ->
+    resume analysis -> interview prep -> cold email draft, in one call.
+    """
+    if not request.job_title and not request.selected_job:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either a job_title to search, or a selected_job to match against."
+        )
+
+    print(f"🛰️ [AUTOPILOT] Running pipeline for {request.email}")
+    try:
+        final_state = await run_pipeline(request.model_dump())
+    except Exception as e:
+        print(f"❌ [AUTOPILOT ERROR]:")
+        raise_for_llm_error(e)
+    print(f"🛰️ [AUTOPILOT] Finished. Errors: {final_state.get('errors') or 'none'}")
+
+    return {
+        "jobs": final_state.get("jobs", []),
+        "selected_job": final_state.get("selected_job"),
+        "resume_analysis": final_state.get("resume_analysis"),
+        "interview_prep": final_state.get("interview_prep"),
+        "cold_email": final_state.get("cold_email"),
+        "errors": final_state.get("errors", []),
+    }
+
+
 # --- MODULE 1: Job Scraper ---
 class ScraperRequest(BaseModel):
     email: str
@@ -178,8 +193,7 @@ async def trigger_job_scraper(request: ScraperRequest):
 
     except Exception as e:
         print(f"❌ [JOB HUNTER ERROR]: {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_for_llm_error(e)
 
 
 # --- MODULE 2: Resume Analyzer ---
@@ -221,8 +235,7 @@ async def analyze_resume(
 
     except Exception as e:
         print(f"❌ [RESUME ANALYZER ERROR]:")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_for_llm_error(e)
 
 
 # --- MODULE 3: Interview Prep ---
@@ -260,8 +273,7 @@ async def interview_prep(
 
     except Exception as e:
         print(f"❌ [INTERVIEW COACH ERROR]:")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_for_llm_error(e)
 
 
 # --- MODULE 4: Cold Email Generator ---
@@ -303,8 +315,7 @@ async def generate_email(
 
     except Exception as e:
         print(f"❌ [EMAIL AGENT ERROR]:")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_for_llm_error(e)
 
 
 # --- MODULE 5: Video Soft Skills Coach ---
@@ -362,8 +373,7 @@ async def analyze_video(file: UploadFile = File(...)):
 
     except Exception as e:
         print(f"❌ [VIDEO COACH ERROR]:")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_for_llm_error(e)
 
     finally:
         # Cleanup always runs, on both success and failure.

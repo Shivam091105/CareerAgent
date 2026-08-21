@@ -20,9 +20,11 @@ class VideoCrew:
     def __init__(self):
         self.api_key = os.getenv("GROQ_API_KEY")
         self.llm = LLM(
-            model="groq/llama-3.3-70b-versatile",
+            model="groq/openai/gpt-oss-120b",
             api_key=self.api_key,
-            temperature=0.3
+            temperature=0.3,
+            timeout=60,
+            additional_params={"num_retries": 3}
         )
         self.client = Groq(api_key=self.api_key)
 
