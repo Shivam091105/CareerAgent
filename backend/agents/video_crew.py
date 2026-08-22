@@ -5,7 +5,7 @@ from crewai import Agent, Crew, Process, Task, LLM
 from groq import Groq
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # --- Output Schema ---
 class SoftSkillAnalysis(BaseModel):

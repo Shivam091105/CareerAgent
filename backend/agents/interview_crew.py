@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from crewai import Agent, Crew, Process, Task, LLM
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # --- Output Schema ---
 class InterviewQuestion(BaseModel):
